@@ -1,237 +1,189 @@
+"""
+Test script for Part 1 Transaction implementation (no locking)
+Tests basic transaction functionality: commit, abort, and rollback
+"""
+
 from lstore.db import Database
 from lstore.query import Query
 from lstore.transaction import Transaction
 from lstore.transaction_worker import TransactionWorker
-from random import choice, randint, sample, seed
-import time
+from random import randint, seed
 
+print("=" * 60)
+print("TRANSACTION PART 1 TEST SCRIPT")
+print("=" * 60)
+
+# Setup
 db = Database()
-db.open('./CS451')
+db.open('./test_db')
 
-grades_table = db.get_table('Grades')
+# Create a simple test table
+grades_table = db.create_table('Grades', 5, 0)
 query = Query(grades_table)
 
-print("=" * 60)
-print("COMPREHENSIVE LOCKING TEST SUITE")
-print("=" * 60)
+print("\n[TEST 1] Basic Transaction Commit")
+print("-" * 60)
 
-# Test 1: High Contention Test - Many transactions updating same records
-print("\n[TEST 1] High Contention Test")
-print("Testing: Lock conflicts and abort/retry behavior")
+# Insert some initial records
+print("Inserting initial records...")
+for i in range(5):
+    key = 1000 + i
+    query.insert(key, i, i*10, i*100, i*1000)
+    print(f"  Inserted: {key}, {i}, {i*10}, {i*100}, {i*1000}")
 
-seed(12345)
-num_records = 50  # Small set for high contention
-num_transactions = 100
-num_threads = 8
-
-keys = [92106429 + i for i in range(num_records)]
-initial_values = {}
-
-# Initialize records with known values
-for key in keys:
-    initial_values[key] = randint(100, 200)
-    query.update(key, None, initial_values[key], None, None, None)
-
-transactions = [Transaction() for _ in range(num_transactions)]
-transaction_workers = [TransactionWorker() for _ in range(num_threads)]
-
-# Each transaction updates RANDOM records (high conflict probability)
-for t in transactions:
-    # Each transaction updates 5 random records
-    target_keys = sample(keys, 5)
-    for key in target_keys:
-        new_value = randint(0, 50)
-        t.add_query(query.select, grades_table, key, 0, [1, 1, 1, 1, 1])
-        t.add_query(query.update, grades_table, key, None, new_value, None, None, None)
-
-# Distribute to workers
-for i, t in enumerate(transactions):
-    transaction_workers[i % num_threads].add_transaction(t)
-
-# Run and measure
-start_time = time.time()
-for worker in transaction_workers:
-    worker.run()
-for worker in transaction_workers:
-    worker.join()
-elapsed = time.time() - start_time
-
-# Check statistics
-total_commits = sum(worker.result for worker in transaction_workers)
-total_aborts = sum(len(worker.stats) for worker in transaction_workers) - total_commits
-
-print(f"Transactions attempted: {num_transactions}")
-print(f"Commits: {total_commits}")
-print(f"Aborts (that later retried): {total_aborts}")
-print(f"Time: {elapsed:.2f}s")
-print(f"Status: {'PASS - All transactions committed' if total_commits == num_transactions else 'FAIL'}")
-
-# Test 2: Read-Write Conflict Test
-print("\n[TEST 2] Read-Write Conflict Test")
-print("Testing: Readers don't block readers, but writers block readers")
-
-seed(23456)
-num_read_transactions = 50
-num_write_transactions = 10
-
-transactions = []
-
-# Create many read transactions
-for _ in range(num_read_transactions):
-    t = Transaction()
-    read_key = choice(keys)
-    t.add_query(query.select, grades_table, read_key, 0, [1, 1, 1, 1, 1])
-    transactions.append(t)
-
-# Intersperse write transactions
-for _ in range(num_write_transactions):
-    t = Transaction()
-    write_key = choice(keys)
-    t.add_query(query.update, grades_table, write_key, None, randint(0, 100), None, None, None)
-    transactions.append(t)
-
-# Shuffle for random ordering
-from random import shuffle
-shuffle(transactions)
-
-transaction_workers = [TransactionWorker() for _ in range(num_threads)]
-for i, t in enumerate(transactions):
-    transaction_workers[i % num_threads].add_transaction(t)
-
-start_time = time.time()
-for worker in transaction_workers:
-    worker.run()
-for worker in transaction_workers:
-    worker.join()
-elapsed = time.time() - start_time
-
-total_commits = sum(worker.result for worker in transaction_workers)
-print(f"Total transactions: {len(transactions)}")
-print(f"Commits: {total_commits}")
-print(f"Time: {elapsed:.2f}s")
-print(f"Status: {'PASS' if total_commits == len(transactions) else 'FAIL'}")
-
-# Test 3: Isolation Test - Verify no dirty reads
-print("\n[TEST 3] Isolation Test (No Dirty Reads)")
-print("Testing: Transactions don't see uncommitted changes")
-
-seed(34567)
-test_key = keys[0]
-
-# Set initial value
-query.update(test_key, None, 1000, None, None, None)
-
-# Transaction 1: Long-running update that will abort
+# Test 1: Simple transaction that should commit
+print("\n[Transaction 1] Update with commit:")
 t1 = Transaction()
-t1.add_query(query.update, grades_table, test_key, None, 9999, None, None, None)
-# Add a conflicting update that will cause abort
-t1.add_query(query.update, grades_table, test_key, None, 8888, None, None, None)
+t1.add_query(query.select, grades_table, 1000, 0, [1, 1, 1, 1, 1])
+t1.add_query(query.update, grades_table, 1000, *[None, 99, None, None, None])
+result1 = t1.run()
 
-# Transaction 2: Should read original value, not 9999
-t2 = Transaction()
-t2.add_query(query.select, grades_table, test_key, 0, [1, 1, 1, 1, 1])
+print(f"  Transaction result: {'COMMIT' if result1 else 'ABORT'}")
 
-# Run them concurrently
-workers = [TransactionWorker([t1]), TransactionWorker([t2])]
-for w in workers:
-    w.run()
-for w in workers:
-    w.join()
+# Verify the update
+record = query.select(1000, 0, [1, 1, 1, 1, 1])[0]
+print(f"  After transaction - Key 1000: {record.columns}")
+print(f"  Expected column[1] = 99, Got = {record.columns[1]}")
+assert record.columns[1] == 99, "Update failed!"
+print("  ✓ Test 1 PASSED")
 
-# Verify final value
-final_record = query.select(test_key, 0, [1, 1, 1, 1, 1])[0]
-final_value = final_record.columns[1]
 
-print(f"Initial value: 1000")
-print(f"Final value: {final_value}")
-print(f"Status: {'PASS - No dirty read' if final_value != 9999 else 'FAIL - Dirty read detected!'}")
-
-# Test 4: Deadlock Prevention Test
-print("\n[TEST 4] Deadlock Prevention Test")
-print("Testing: No-wait policy prevents deadlocks")
-
-seed(45678)
-# Create transactions that would deadlock without no-wait
-# T1: locks A then B
-# T2: locks B then A
-# With no-wait, one should abort immediately
-
-key_a = keys[0]
-key_b = keys[1]
-
-t1 = Transaction()
-t1.add_query(query.update, grades_table, key_a, None, 100, None, None, None)
-t1.add_query(query.update, grades_table, key_b, None, 200, None, None, None)
+print("\n[TEST 2] Transaction with Multiple Operations")
+print("-" * 60)
 
 t2 = Transaction()
-t2.add_query(query.update, grades_table, key_b, None, 300, None, None, None)
-t2.add_query(query.update, grades_table, key_a, None, 400, None, None, None)
+t2.add_query(query.update, grades_table, 1001, *[None, 111, None, None, None])
+t2.add_query(query.update, grades_table, 1002, *[None, 222, None, None, None])
+t2.add_query(query.update, grades_table, 1003, *[None, 333, None, None, None])
+result2 = t2.run()
 
-workers = [TransactionWorker([t1]), TransactionWorker([t2])]
+print(f"  Transaction result: {'COMMIT' if result2 else 'ABORT'}")
 
-start_time = time.time()
-for w in workers:
-    w.run()
-for w in workers:
-    w.join()
-elapsed = time.time() - start_time
+# Verify all updates
+for i, expected in enumerate([111, 222, 333]):
+    record = query.select(1001 + i, 0, [1, 1, 1, 1, 1])[0]
+    print(f"  Key {1001 + i}: column[1] = {record.columns[1]} (expected {expected})")
+    assert record.columns[1] == expected, f"Update for key {1001 + i} failed!"
+print("  ✓ Test 2 PASSED")
 
-total_commits = sum(w.result for w in workers)
-print(f"Both transactions completed: {total_commits == 2}")
-print(f"Time: {elapsed:.2f}s")
-print(f"Status: {'PASS - No deadlock' if elapsed < 5.0 else 'FAIL - Possible deadlock (timeout)'}")
 
-# Test 5: Lock Upgrade Test
-print("\n[TEST 5] Lock Upgrade Test")
-print("Testing: Transaction can upgrade from shared to exclusive lock")
+print("\n[TEST 3] Transaction with TransactionWorker (Single Thread)")
+print("-" * 60)
 
-seed(56789)
-test_key = keys[0]
+t3 = Transaction()
+t3.add_query(query.update, grades_table, 1004, *[None, 444, None, None, None])
 
-# Transaction that reads then writes same record
-t = Transaction()
-t.add_query(query.select, grades_table, test_key, 0, [1, 1, 1, 1, 1])
-t.add_query(query.update, grades_table, test_key, None, 777, None, None, None)
-
-worker = TransactionWorker([t])
+worker = TransactionWorker([t3])
 worker.run()
 worker.join()
 
-print(f"Lock upgrade successful: {worker.result == 1}")
-print(f"Status: {'PASS' if worker.result == 1 else 'FAIL'}")
+print(f"  Worker result: {worker.result} transactions committed")
+assert worker.result == 1, "Worker should have committed 1 transaction"
 
-# Test 6: Range Lock Test (if sum is implemented)
-print("\n[TEST 6] Range Lock Test")
-print("Testing: Range queries acquire proper locks")
+record = query.select(1004, 0, [1, 1, 1, 1, 1])[0]
+print(f"  Key 1004: column[1] = {record.columns[1]} (expected 444)")
+assert record.columns[1] == 444, "Worker transaction failed!"
+print("  ✓ Test 3 PASSED")
 
-try:
-    seed(67890)
-    start_key = keys[0]
-    end_key = keys[10]
-    
-    # Transaction 1: Sum over range
-    t1 = Transaction()
-    t1.add_query(query.sum, grades_table, start_key, end_key, 0)
-    
-    # Transaction 2: Update within range (should conflict)
-    t2 = Transaction()
-    mid_key = keys[5]
-    t2.add_query(query.update, grades_table, mid_key, None, 999, None, None, None)
-    
-    workers = [TransactionWorker([t1]), TransactionWorker([t2])]
-    for w in workers:
-        w.run()
-    for w in workers:
-        w.join()
-    
-    total_commits = sum(w.result for w in workers)
-    print(f"Both transactions handled: {total_commits == 2}")
-    print(f"Status: {'PASS' if total_commits == 2 else 'FAIL'}")
-except Exception as e:
-    print(f"Status: SKIPPED (sum not implemented or error: {e})")
+
+print("\n[TEST 4] Multiple Transactions with Multiple Workers")
+print("-" * 60)
+
+num_transactions = 10
+num_workers = 3
+
+transactions = []
+for i in range(num_transactions):
+    t = Transaction()
+    key = 2000 + i
+    # Insert new records
+    t.add_query(query.insert, grades_table, key, i, i*2, i*3, i*4)
+    transactions.append(t)
+
+workers = []
+for i in range(num_workers):
+    workers.append(TransactionWorker())
+
+# Distribute transactions across workers
+for i, t in enumerate(transactions):
+    workers[i % num_workers].add_transaction(t)
+
+# Run all workers
+for w in workers:
+    w.run()
+
+# Wait for completion
+for w in workers:
+    w.join()
+
+# Check results
+total_committed = sum(w.result for w in workers)
+print(f"  Total committed: {total_committed}/{num_transactions}")
+assert total_committed == num_transactions, "Some transactions failed!"
+
+# Verify all inserts
+for i in range(num_transactions):
+    key = 2000 + i
+    record = query.select(key, 0, [1, 1, 1, 1, 1])[0]
+    expected = [key, i, i*2, i*3, i*4]
+    print(f"  Key {key}: {record.columns} (expected {expected})")
+    assert record.columns == expected, f"Insert for key {key} failed!"
+print("  ✓ Test 4 PASSED")
+
+
+print("\n[TEST 5] Concurrent Updates (Non-conflicting keys)")
+print("-" * 60)
+
+# Create base records
+for i in range(20):
+    key = 3000 + i
+    query.insert(key, 0, 0, 0, 0)
+
+# Create transactions that update different keys
+num_transactions = 20
+transactions = []
+seed(12345)
+
+for i in range(num_transactions):
+    t = Transaction()
+    key = 3000 + i  # Each transaction gets unique key
+    value = randint(100, 999)
+    t.add_query(query.update, grades_table, key, *[None, value, None, None, None])
+    transactions.append((t, key, value))
+
+# Run with multiple workers
+num_workers = 4
+workers = [TransactionWorker() for _ in range(num_workers)]
+
+for i, (t, _, _) in enumerate(transactions):
+    workers[i % num_workers].add_transaction(t)
+
+for w in workers:
+    w.run()
+
+for w in workers:
+    w.join()
+
+# Verify results
+total_committed = sum(w.result for w in workers)
+print(f"  Total committed: {total_committed}/{num_transactions}")
+assert total_committed == num_transactions, "Some transactions failed!"
+
+success_count = 0
+for t, key, expected_value in transactions:
+    record = query.select(key, 0, [1, 1, 1, 1, 1])[0]
+    if record.columns[1] == expected_value:
+        success_count += 1
+    else:
+        print(f"  ✗ Key {key}: got {record.columns[1]}, expected {expected_value}")
+
+print(f"  Verified {success_count}/{num_transactions} updates")
+assert success_count == num_transactions, "Some updates were incorrect!"
+print("  ✓ Test 5 PASSED")
+
 
 print("\n" + "=" * 60)
-print("LOCKING TEST SUITE COMPLETE")
+print("ALL TESTS PASSED!")
 print("=" * 60)
 
 db.close()

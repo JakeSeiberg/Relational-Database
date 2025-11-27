@@ -1,5 +1,6 @@
 from lstore.table import Table
 from lstore.page import Page
+from lstore.lock import get_lock_manager
 import os
 import struct
 
@@ -8,6 +9,7 @@ class Database():
     def __init__(self):
         self.tables = []
         self.path = None
+        self.lock_manager = get_lock_manager()  # Initialize global lock manager
 
     def open(self, path):
         """Load database from disk"""

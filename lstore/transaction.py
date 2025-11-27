@@ -191,7 +191,7 @@ class Transaction:
             # Note: We should already have a lock on this record
             from lstore.query import Query
             query = Query(table)
-            records = query.select(primary_key, 0, [1] * table.num_columns)
+            records = query.select(primary_key, table.key, [1] * table.num_columns)
             
             if records and len(records) > 0:
                 record = records[0]

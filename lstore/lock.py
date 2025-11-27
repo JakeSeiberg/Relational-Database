@@ -129,22 +129,7 @@ class LockManager:
             
             # Clear transaction's lock tracking
             del self.transaction_locks[transaction_id]
-    
-    def has_lock(self, transaction_id, record_id, lock_type=None):
-        """Check if transaction holds a lock on a record."""
-        with self.manager_lock:
-            if transaction_id not in self.transaction_locks:
-                return False
-            
-            for rid, lt in self.transaction_locks[transaction_id]:
-                if rid == record_id:
-                    if lock_type is None:
-                        return True
-                    if lock_type == LockType.EXCLUSIVE and lt == LockType.EXCLUSIVE:
-                        return True
-                    if lock_type == LockType.SHARED and lt in [LockType.SHARED, LockType.EXCLUSIVE]:
-                        return True
-            return False
+
 
 # Global lock manager instance
 _lock_manager = None
