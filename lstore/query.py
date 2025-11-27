@@ -5,16 +5,14 @@ from lstore.index import Index
 
 class Query:
     """
-    DEADLOCK-FREE VERSION
-    - Minimal lock usage
-    - Never hold multiple locks simultaneously
-    - Release locks before calling methods that might acquire locks
+    Query class with extensive debugging.
     """
     def __init__(self, table):
         self.table = table
 
     
     def delete(self, primary_key):
+        """Delete a record by primary key."""
         try:
             rid = self.table.index.locate(self.table.key, primary_key)
             if rid is None:
@@ -26,42 +24,49 @@ class Query:
                 del self.table.page_directory[rid]
             
             return True
-        except:
+        except Exception as e:
+            print(f"DELETE ERROR: {e}")
+            import traceback
+            traceback.print_exc()
             return False
     
     
     def insert(self, *columns):
+        """Insert a new record."""
         try:
             primary_key = columns[self.table.key]
-            existing_rid = self.table.index.locate(self.table.key, primary_key)
-
-            if existing_rid is not None:
-                return False
+            print(f"Attempting insert with primary key: {primary_key}")
             
+            # Let insert_row handle everything atomically
             rid = self.table.insert_row(list(columns))
             
             if rid is not None:
+                print(f"Insert SUCCESS: key={primary_key}, rid={rid}")
                 return True
             else:
+                print(f"Insert FAILED: key={primary_key}, insert_row returned None")
                 return False
-        except:
+        except Exception as e:
+            print(f"INSERT EXCEPTION for key {columns[self.table.key]}: {e}")
+            import traceback
+            traceback.print_exc()
             return False
 
     
     def select(self, search_key, search_key_index, projected_columns_index):
+        """Select a record by search key."""
         try:
             rid = self.table.index.locate(search_key_index, search_key)
             if rid is None:
+                print(f"SELECT: No RID found for key {search_key}")
                 return []
             
-            # Get locations with lock, then release immediately
             with self.table.pd_lock:
                 if rid not in self.table.page_directory:
+                    print(f"SELECT: RID {rid} not in page_directory")
                     return []
-                locations = list(self.table.page_directory[rid])  # Make a copy
-            # Lock released here
+                locations = list(self.table.page_directory[rid])
             
-            # Now read without holding any locks
             record_values = []
             for col_idx, (page_idx, slot_idx) in enumerate(locations):
                 if projected_columns_index[col_idx]:
@@ -71,8 +76,11 @@ class Query:
                     record_values.append(None)
             
             return [Record(rid, search_key, record_values)]
-        except:
-            return False
+        except Exception as e:
+            print(f"SELECT ERROR for key {search_key}: {e}")
+            import traceback
+            traceback.print_exc()
+            return []
 
 
     def select_version(self, search_key, search_key_index, projected_columns_index, relative_version):
@@ -136,14 +144,11 @@ class Query:
             if rid is None:
                 return False
             
-            # Get old locations with lock, then release
             with self.table.pd_lock:
                 if rid not in self.table.page_directory:
                     return False
-                old_locations = list(self.table.page_directory[rid])  # Copy
-            # Lock released
+                old_locations = list(self.table.page_directory[rid])
             
-            # Check primary key conflict
             if columns[self.table.key] is not None:
                 new_primary_key = columns[self.table.key]
                 if new_primary_key != primary_key:
@@ -153,7 +158,6 @@ class Query:
             
             tail_locations = [None] * self.table.num_columns
             
-            # Update columns WITHOUT holding any table-level locks
             for col_idx, new_value in enumerate(columns):
                 if new_value is not None:
                     page_idx, slot_idx = old_locations[col_idx]
@@ -170,13 +174,11 @@ class Query:
                     tail_slot_idx = tail_page.num_records - 1
                     tail_locations[col_idx] = (tail_page_idx, tail_slot_idx)
                     
-                    # Direct write - page.write() already has internal lock
                     offset = slot_idx * 8
                     page = self.table.base_page[col_idx][page_idx]
-                    # NO EXTRA LOCK HERE - causes deadlock
-                    page.data[offset:offset + 8] = new_value.to_bytes(8, byteorder='little', signed=True)
+                    with page.lock:
+                        page.data[offset:offset + 8] = new_value.to_bytes(8, byteorder='little', signed=True)
             
-            # Update version chain with lock
             with self.table.vc_lock:
                 if rid not in self.table.version_chain:
                     self.table.version_chain[rid] = []
@@ -194,7 +196,6 @@ class Query:
             rid_list = self.table.index.locate_range(start_range, end_range, self.table.key)
             
             for rid in rid_list:
-                # Check existence
                 with self.table.pd_lock:
                     if rid not in self.table.page_directory:
                         continue
@@ -231,13 +232,15 @@ class Query:
 
     def increment(self, key, column):
         try:
-            r = self.select(key, self.table.key, [1] * self.table.num_columns)[0]
-            if r is not False:
-                updated_columns = [None] * self.table.num_columns
-                updated_columns[column] = r.columns[column] + 1
-                u = self.update(key, *updated_columns)
-                return u
-            return False
+            r = self.select(key, self.table.key, [1] * self.table.num_columns)
+            if not r or r == False:
+                return False
+            r = r[0]
+            
+            updated_columns = [None] * self.table.num_columns
+            updated_columns[column] = r.columns[column] + 1
+            u = self.update(key, *updated_columns)
+            return u
         except:
             return False
     
@@ -252,12 +255,12 @@ class Query:
                 with self.table.pd_lock:
                     if rid in self.table.page_directory:
                         page_index, record_offset = self.table.page_directory[rid][aggregate_column_index]
-                # Lock released before calling read_column
+                    else:
+                        continue
                 
-                if rid in self.table.page_directory:
-                    value = self.table.read_column(aggregate_column_index, page_index, record_offset)
-                    output += value
-                    found = True
+                value = self.table.read_column(aggregate_column_index, page_index, record_offset)
+                output += value
+                found = True
 
             if not found:
                 return False

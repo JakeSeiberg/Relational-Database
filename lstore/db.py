@@ -3,6 +3,7 @@ from lstore.page import Page
 from lstore.lock import get_lock_manager
 import os
 import struct
+import threading
 
 class Database():
 
@@ -10,33 +11,35 @@ class Database():
         self.tables = []
         self.path = None
         self.lock_manager = get_lock_manager()  # Initialize global lock manager
+        self.db_lock = threading.RLock()  # Protect database-level operations
 
     def open(self, path):
         """Load database from disk"""
-        self.path = path
-        
-        if not os.path.exists(path):
-            os.makedirs(path)
-            return
-        
-        metadata_path = os.path.join(path, 'metadata.db')
-        
-        if not os.path.exists(metadata_path):
-            return
-        
-        with open(metadata_path, 'rb') as f:
-            num_tables = struct.unpack('i', f.read(4))[0]
+        with self.db_lock:
+            self.path = path
             
-            for i in range(num_tables):
-                name_len = struct.unpack('i', f.read(4))[0]
-                name = f.read(name_len).decode('utf-8')
-                num_columns = struct.unpack('i', f.read(4))[0]
-                key_index = struct.unpack('i', f.read(4))[0]
+            if not os.path.exists(path):
+                os.makedirs(path)
+                return
+            
+            metadata_path = os.path.join(path, 'metadata.db')
+            
+            if not os.path.exists(metadata_path):
+                return
+            
+            with open(metadata_path, 'rb') as f:
+                num_tables = struct.unpack('i', f.read(4))[0]
                 
-                table = Table(name, num_columns, key_index)
-                self.tables.append(table)
-                
-                self.load_table_data(path, table)
+                for i in range(num_tables):
+                    name_len = struct.unpack('i', f.read(4))[0]
+                    name = f.read(name_len).decode('utf-8')
+                    num_columns = struct.unpack('i', f.read(4))[0]
+                    key_index = struct.unpack('i', f.read(4))[0]
+                    
+                    table = Table(name, num_columns, key_index)
+                    self.tables.append(table)
+                    
+                    self.load_table_data(path, table)
 
     def load_table_data(self, path, table):
         """Load all data for a specific table"""        
@@ -53,31 +56,26 @@ class Database():
             tail_dir = os.path.join(table_path, f'tail_col_{idx}')
             table.tail_page[idx] = self.load_pages(tail_dir)
         
-
         self.load_page_directory(table_path, table)
         self.load_version_chains(table_path, table)
         
+        # Rebuild index after loading data
         table.index.drop_index(table.key)
         table.index.create_index(table.key)
 
     def get_page_number(self, filename):
+        """Extract page number from filename"""
         underscore = filename.split('_')[1] 
         dot = underscore.split('.')[0]
-        
         return int(dot)
 
     def load_pages(self, directory):
         """Load all pages from a directory"""
-        
         if not os.path.exists(directory):
             return [Page()]
         
         all_files = os.listdir(directory)
-        dat_files = []
-        for f in all_files:
-            if f.endswith('.dat'):
-                dat_files.append(f)
-    
+        dat_files = [f for f in all_files if f.endswith('.dat')]
         page_files = sorted(dat_files, key=self.get_page_number)
         
         pages = []
@@ -88,11 +86,7 @@ class Database():
                 page.data = bytearray(f.read(4096))
             pages.append(page)
 
-        if pages:
-            return pages
-        else:
-            return [Page()]
-    
+        return pages if pages else [Page()]
 
     def load_page_directory(self, table_path, table):
         """Load the page directory mapping RIDs to physical locations"""
@@ -129,10 +123,9 @@ class Database():
             num_rids = struct.unpack('i', f.read(4))[0]
             
             for i in range(num_rids):
-                versions = []
-                
                 rid = struct.unpack('q', f.read(8))[0]
                 num_versions = struct.unpack('i', f.read(4))[0]
+                versions = []
                 
                 for j in range(num_versions):
                     tail_locations = []
@@ -144,35 +137,34 @@ class Database():
                             tail_locations.append((page_idx, slot_idx))
                         else:
                             tail_locations.append(None)
-
                     versions.append(tail_locations)
                 
                 table.version_chain[rid] = versions
 
     def close(self):
         """Write all data to disk"""
-        if self.path is None:
-            return
-        
-        path = self.path
-        
-        if not os.path.exists(path):
-            os.makedirs(path)
-        
-        metadata_path = os.path.join(path, 'metadata.db')
-        with open(metadata_path, 'wb') as f:
-            f.write(struct.pack('i', len(self.tables)))
+        with self.db_lock:
+            if self.path is None:
+                return
+            
+            path = self.path
+            
+            if not os.path.exists(path):
+                os.makedirs(path)
+            
+            metadata_path = os.path.join(path, 'metadata.db')
+            with open(metadata_path, 'wb') as f:
+                f.write(struct.pack('i', len(self.tables)))
+                
+                for table in self.tables:
+                    name_bytes = table.name.encode('utf-8')
+                    f.write(struct.pack('i', len(name_bytes)))
+                    f.write(name_bytes)
+                    f.write(struct.pack('i', table.num_columns))
+                    f.write(struct.pack('i', table.key))
             
             for table in self.tables:
-                name_bytes = table.name.encode('utf-8')
-                f.write(struct.pack('i', len(name_bytes)))
-                f.write(name_bytes)
-
-                f.write(struct.pack('i', table.num_columns))
-                f.write(struct.pack('i', table.key))
-        
-        for table in self.tables:
-            self.save_table_data(path, table)
+                self.save_table_data(path, table)
 
     def save_table_data(self, path, table):
         """Save all data for a specific table"""
@@ -238,7 +230,6 @@ class Database():
                         else:
                             f.write(struct.pack('?', False))
 
-   
     def create_table(self, name, num_columns, key_index):
         """
         Creates a new table
@@ -246,28 +237,28 @@ class Database():
         :param num_columns: int
         :param key: int
         """
-        table = Table(name, num_columns, key_index)
-        self.tables.append(table)
-        return table
-
-    
+        with self.db_lock:
+            table = Table(name, num_columns, key_index)
+            self.tables.append(table)
+            return table
     
     def drop_table(self, name):
         """Deletes the specified table"""
-        for table in self.tables:
-            if table.name == name:
-                self.tables.remove(table)
-                print("table dropped")
-                return 1
-        print("table not found")
-        return -1
+        with self.db_lock:
+            for table in self.tables:
+                if table.name == name:
+                    self.tables.remove(table)
+                    print("table dropped")
+                    return 1
+            print("table not found")
+            return -1
 
-   
     def get_table(self, name):
-        """ Returns table with the passed name """
-        for table in self.tables:
-            if table.name == name:
-                print("table was found")
-                return table
-        print('table not found')
-        return None
+        """Returns table with the passed name"""
+        with self.db_lock:
+            for table in self.tables:
+                if table.name == name:
+                    print("table was found")
+                    return table
+            print('table not found')
+            return None

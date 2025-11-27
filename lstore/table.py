@@ -1,13 +1,6 @@
 """
-TABLE.PY - UPDATED VERSION
-Replace your existing table.py with this file.
-
-Key Changes:
-1. Added: from lstore.thread_safe import ThreadSafeIndex
-2. Wrapped index with ThreadSafeIndex
-3. Added 4 locks: metadata_lock, pd_lock, rid_lock, vc_lock
-4. Made insert_row() thread-safe
-5. Added thread-safe getter methods
+TABLE.PY - FINAL FIX
+Duplicate key checking moved inside insert_lock for full atomicity
 """
 
 from lstore.index import Index
@@ -56,41 +49,50 @@ class Table:
         self.pd_lock = threading.RLock()  # Protects page_directory
         self.rid_lock = threading.RLock()  # Protects rid_counter
         self.vc_lock = threading.RLock()  # Protects version_chain
+        self.insert_lock = threading.RLock()  # Protects entire insert operation
 
         self.index.create_index(self.key)
 
     def insert_row(self, columns):
-        """Thread-safe row insertion"""
-        # Protect rid_counter and page_directory
-        with self.rid_lock:
+        """Thread-safe row insertion - entire operation is atomic including duplicate check"""
+        # Use a single lock for the entire insert operation to prevent race conditions
+        with self.insert_lock:
+            # Check for duplicate key INSIDE the lock
+            primary_key_value = columns[self.key]
+            existing_rid = self.index.locate(self.key, primary_key_value)
+            
+            if existing_rid is not None:
+                # Duplicate key found
+                return None
+            
+            # Allocate RID
             rid = self.rid_counter + 1
             self.rid_counter += 1
-        
-        page_positions = [None] * self.num_columns
-   
-        for i, value in enumerate(columns):
-            current_page = self.base_page[i][-1]
             
-            # Check and allocate new page if needed
-            if not current_page.has_capacity():
-                new_page = Page()
-                self.base_page[i].append(new_page)
-                current_page = new_page
+            page_positions = [None] * self.num_columns
+       
+            # Write to all column pages
+            for i, value in enumerate(columns):
+                current_page = self.base_page[i][-1]
+                
+                # Check and allocate new page if needed
+                if not current_page.has_capacity():
+                    new_page = Page()
+                    self.base_page[i].append(new_page)
+                    current_page = new_page
+                
+                current_page.write(value)
+                page_index = len(self.base_page[i]) - 1
+                record_offset = self.base_page[i][-1].num_records - 1
+                page_positions[i] = (page_index, record_offset)
             
-            current_page.write(value)
-            page_index = len(self.base_page[i]) - 1
-            record_offset = self.base_page[i][-1].num_records - 1
-            page_positions[i] = (page_index, record_offset)
-        
-        # Update page directory with lock
-        with self.pd_lock:
+            # Update page directory (already under insert_lock)
             self.page_directory[rid] = page_positions
-        
-        # Update index
-        primary_key_value = columns[self.key]
-        self.index.insert(self.key, primary_key_value, rid)
-        
-        return rid
+            
+            # Update index (also under insert_lock)
+            self.index.insert(self.key, primary_key_value, rid)
+            
+            return rid
         
     def read_column(self, col_idx, page_idx, slot_idx):
         """Thread-safe column read"""

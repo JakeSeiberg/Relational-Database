@@ -1,82 +1,72 @@
 from lstore.table import Table, Record
 from lstore.index import Index
 import threading
+import time
 
 class TransactionWorker:
     """
-    DEADLOCK-FREE VERSION
-    Creates a transaction worker object.
+    Transaction worker that executes transactions with limited retry.
     """
     def __init__(self, transactions = []):
         self.stats = []
-        self.transactions = transactions[:] if transactions else []  # Copy the list
+        self.transactions = transactions[:] if transactions else []
         self.result = 0
         self.thread = None
     
-    """
-    Appends t to transactions
-    """
     def add_transaction(self, t):
+        """Appends t to transactions"""
         self.transactions.append(t)
     
-    """
-    Runs all transaction as a thread
-    """
     def run(self):
-        # Create and start a thread that calls __run
+        """Runs all transaction as a thread"""
         self.thread = threading.Thread(target=self.__run)
-        self.thread.daemon = False  # Ensure thread completes
+        self.thread.daemon = False
         self.thread.start()
     
-    """
-    Waits for the worker to finish
-    """
     def join(self):
+        """Waits for the worker to finish"""
         if self.thread is not None:
-            self.thread.join(timeout=30)  # Add timeout to prevent infinite waiting
+            self.thread.join(timeout=30)
             if self.thread.is_alive():
                 print(f"WARNING: Worker thread did not finish within timeout")
     
     def __run(self):
         """
         Execute all transactions assigned to this worker.
-        Retry aborted transactions until they commit.
+        With simplified locking, most should succeed on first try.
         """
         for transaction in self.transactions:
-            # Keep retrying until the transaction commits
             committed = False
             retry_count = 0
-            max_retries = 100  # Prevent infinite retry loops
+            max_retries = 10  # Reduced - should rarely need retries
             
             while not committed and retry_count < max_retries:
                 try:
-                    # Each transaction returns True if committed or False if aborted
                     result = transaction.run()
                     
                     if result:
-                        # Transaction committed successfully
                         committed = True
                         self.stats.append(True)
                     else:
-                        # Transaction aborted due to lock conflict or other failure
-                        # Reset transaction state for retry
+                        # Reset for retry
                         transaction.executed_operations.clear()
                         retry_count += 1
                         
-                        # Small delay before retry to reduce contention
+                        # Small delay
                         if retry_count < max_retries:
-                            import time
-                            time.sleep(0.001)  # 1ms delay
+                            time.sleep(0.001)
                 
                 except Exception as e:
-                    print(f"ERROR in transaction worker: {type(e).__name__}: {e}")
+                    print(f"ERROR in transaction: {type(e).__name__}: {e}")
                     import traceback
                     traceback.print_exc()
-                    break
+                    transaction.executed_operations.clear()
+                    retry_count += 1
+                    if retry_count < max_retries:
+                        time.sleep(0.001)
             
-            if retry_count >= max_retries:
-                print(f"WARNING: Transaction exceeded max retries ({max_retries})")
+            if not committed:
+                print(f"WARNING: Transaction failed after {max_retries} retries")
                 self.stats.append(False)
         
-        # Store the number of transactions that committed
         self.result = len([x for x in self.stats if x])

@@ -86,7 +86,10 @@ class LockManager:
             with self.manager_lock:
                 if transaction_id not in self.transaction_locks:
                     self.transaction_locks[transaction_id] = []
-                self.transaction_locks[transaction_id].append((record_id, LockType.SHARED))
+                # Check if we already have this lock recorded
+                lock_entry = (record_id, LockType.SHARED)
+                if lock_entry not in self.transaction_locks[transaction_id]:
+                    self.transaction_locks[transaction_id].append(lock_entry)
         
         return success
     
@@ -104,11 +107,11 @@ class LockManager:
                 if transaction_id not in self.transaction_locks:
                     self.transaction_locks[transaction_id] = []
                 # Remove any existing shared lock entry for this record
-                if transaction_id in self.transaction_locks:
-                    self.transaction_locks[transaction_id] = [
-                        (rid, lt) for rid, lt in self.transaction_locks[transaction_id]
-                        if rid != record_id
-                    ]
+                self.transaction_locks[transaction_id] = [
+                    (rid, lt) for rid, lt in self.transaction_locks[transaction_id]
+                    if rid != record_id
+                ]
+                # Add exclusive lock entry
                 self.transaction_locks[transaction_id].append((record_id, LockType.EXCLUSIVE))
         
         return success
@@ -133,10 +136,13 @@ class LockManager:
 
 # Global lock manager instance
 _lock_manager = None
+_lock_manager_lock = threading.Lock()
 
 def get_lock_manager():
-    """Get the global lock manager instance."""
+    """Get the global lock manager instance (thread-safe singleton)."""
     global _lock_manager
     if _lock_manager is None:
-        _lock_manager = LockManager()
+        with _lock_manager_lock:
+            if _lock_manager is None:  # Double-check inside lock
+                _lock_manager = LockManager()
     return _lock_manager

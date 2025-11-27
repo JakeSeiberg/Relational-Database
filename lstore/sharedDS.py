@@ -28,6 +28,11 @@ class ThreadSafeIndex:
         """Drop an index on a column."""
         with self.lock:
             return self.index.drop_index(column_number)
+    
+    def insert(self, column_number, value, rid):
+        """Insert a (value, rid) pair into the column's index."""
+        with self.lock:
+            return self.index.insert(column_number, value, rid)
 
 class ThreadSafeBufferpool:
     """
@@ -102,28 +107,6 @@ class ThreadSafeTable:
         with self.metadata_lock:
             return self.table.name
 
-# Example usage in your Table class:
-"""
-class Table:
-    def __init__(self, name, num_columns, key_index):
-        self.name = name
-        self.num_columns = num_columns
-        self.key = key_index
-        
-        # Protect index with lock
-        from lstore.index import Index
-        self._index = Index(self)
-        self.index = ThreadSafeIndex(self._index)
-        
-        # Protect bufferpool with lock
-        if hasattr(self, 'bufferpool'):
-            self._bufferpool = self.bufferpool
-            self.bufferpool = ThreadSafeBufferpool(self._bufferpool)
-        
-        # Lock for table-level operations
-        self.table_lock = threading.RLock()
-"""
-
 # Alternative: Lightweight locking approach
 class PageLatch:
     """
@@ -189,20 +172,3 @@ class WriteLatch:
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.latch.release_write()
         return False
-
-# Usage example:
-"""
-# In your Page or Bufferpool class:
-class Page:
-    def __init__(self):
-        self.data = bytearray(4096)
-        self.latch = PageLatch()
-    
-    def read(self, offset, length):
-        with ReadLatch(self.latch):
-            return self.data[offset:offset+length]
-    
-    def write(self, offset, data):
-        with WriteLatch(self.latch):
-            self.data[offset:offset+len(data)] = data
-"""
