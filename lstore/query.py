@@ -189,38 +189,32 @@ class Query:
 
             for rid in rids:
 
-                # ---- locate base location ----
                 with self.table.pd_lock:
                     if rid not in self.table.page_directory:
                         continue
                     base_page_index, base_slot = self.table.page_directory[rid][aggregate_column_index]
 
-                # ---- if asking for newest version ----
                 if relative_version == 0:
                     value = self.table.read_column(aggregate_column_index, base_page_index, base_slot)
                     total += value
                     found = True
                     continue
 
-                # ---- resolve relative version number ----
                 version_idx = -relative_version - 1  # -1 → 0, -2 → 1, etc.
 
                 with self.table.vc_lock:
                     chain = self.table.version_chain.get(rid, [])
 
-                    # If version too old, clamp to oldest available
                     if version_idx >= len(chain):
                         version_idx = len(chain) - 1
 
                     version_entry = chain[version_idx] if chain else None
 
-                # ---- versioned column ----
                 if version_entry and version_entry[aggregate_column_index] is not None:
                     page_idx, slot_idx = version_entry[aggregate_column_index]
                     page = self.table.tail_page[aggregate_column_index][page_idx]
                     value = page.read(slot_idx)
                 else:
-                    # fallback: base page
                     value = self.table.read_column(aggregate_column_index, base_page_index, base_slot)
 
                 total += value
