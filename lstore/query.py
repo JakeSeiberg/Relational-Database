@@ -36,8 +36,7 @@ class Query:
         try:
             primary_key = columns[self.table.key]
             print(f"Attempting insert with primary key: {primary_key}")
-            
-            # Let insert_row handle everything atomically
+
             rid = self.table.insert_row(list(columns))
             
             if rid is not None:

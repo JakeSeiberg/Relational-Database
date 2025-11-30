@@ -3,7 +3,6 @@ import math
 class Index:
 
     def __init__(self, table):
-        # One index for each table. All our empty initially.
         self.table = table
         self.indices = [None] * table.num_columns
 
@@ -33,9 +32,7 @@ class Index:
         """Create index on specific column"""
         if self.indices[column_number] is None:
             self.indices[column_number] = BPlusTree(order=4)
-            # page_directory maps: rid -> list of (page_idx, slot_idx) for each column
             for rid, positions in self.table.page_directory.items():
-                # Get the position for this specific column
                 page_idx, slot_idx = positions[column_number]
                 value = self.table.read_column(column_number, page_idx, slot_idx)
                 self.indices[column_number].insert(value, rid)
@@ -124,8 +121,7 @@ class BPlusTree:
     def locate_range(self, start, end):
         """Find all RIDs with keys in the range [start, end]."""
         node = self.root
-        
-        # Navigate to the leftmost leaf that could contain start
+
         while not node.is_leaf:
             i = 0
             while i < len(node.keys) and start > node.keys[i]:
@@ -133,7 +129,7 @@ class BPlusTree:
             node = node.children[i]
 
         results = []
-        # Traverse leaf nodes to collect all matching keys
+
         while node:
             for k, rid in node.keys:
                 if start <= k <= end:
@@ -151,4 +147,4 @@ class Node:
         self.keys = []
         self.children = []
         self.is_leaf = True
-        self.next = None  # For leaf nodes to form a linked list
+        self.next = None

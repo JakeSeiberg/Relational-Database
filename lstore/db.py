@@ -10,8 +10,8 @@ class Database():
     def __init__(self):
         self.tables = []
         self.path = None
-        self.lock_manager = get_lock_manager()  # Initialize global lock manager
-        self.db_lock = threading.RLock()  # Protect database-level operations
+        self.lock_manager = get_lock_manager()
+        self.db_lock = threading.RLock()
 
     def open(self, path):
         """Load database from disk"""
@@ -59,7 +59,6 @@ class Database():
         self.load_page_directory(table_path, table)
         self.load_version_chains(table_path, table)
         
-        # Rebuild index after loading data
         table.index.drop_index(table.key)
         table.index.create_index(table.key)
 

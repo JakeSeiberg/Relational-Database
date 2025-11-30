@@ -7,7 +7,7 @@ class ThreadSafeIndex:
     """
     def __init__(self, index):
         self.index = index
-        self.lock = threading.RLock()  # Reentrant lock for nested calls
+        self.lock = threading.RLock()
     
     def create_index(self, column_number):
         """Create an index on a column."""
@@ -41,9 +41,8 @@ class ThreadSafeBufferpool:
     """
     def __init__(self, bufferpool):
         self.bufferpool = bufferpool
-        # Use separate locks for different operations to reduce contention
-        self.page_locks = {}  # One lock per page
-        self.pool_lock = threading.Lock()  # For pool-level operations
+        self.page_locks = {}
+        self.pool_lock = threading.Lock()
     
     def _get_page_lock(self, page_id):
         """Get or create a lock for a specific page."""
@@ -78,7 +77,6 @@ class ThreadSafeBufferpool:
     
     def evict_page(self):
         """Evict a page from the buffer pool."""
-        # This is a pool-level operation that may affect multiple pages
         with self.pool_lock:
             return self.bufferpool.evict_page()
 
@@ -89,8 +87,7 @@ class ThreadSafeTable:
     """
     def __init__(self, table):
         self.table = table
-        self.metadata_lock = threading.RLock()  # For table metadata
-        # Note: Record-level locking is handled by LockManager
+        self.metadata_lock = threading.RLock()
     
     def get_num_columns(self):
         """Thread-safe access to table metadata."""
@@ -107,7 +104,6 @@ class ThreadSafeTable:
         with self.metadata_lock:
             return self.table.name
 
-# Alternative: Lightweight locking approach
 class PageLatch:
     """
     Lightweight latch for short-term page protection.
@@ -146,7 +142,6 @@ class PageLatch:
             self.writer = False
             self.cv.notify_all()
 
-# Context managers for cleaner code
 class ReadLatch:
     """Context manager for read latches."""
     def __init__(self, latch):

@@ -34,8 +34,7 @@ class Table:
         self.key = key
         self.num_columns = num_columns
         self.page_directory = {}
-        
-        # Wrap index with thread-safe wrapper
+
         self._index = Index(self)
         self.index = ThreadSafeIndex(self._index)
         
@@ -44,38 +43,31 @@ class Table:
         self.rid_counter = 0
         self.version_chain = {}
         
-        # Add locks for thread safety
-        self.metadata_lock = threading.RLock()  # Protects metadata (name, key, num_columns)
-        self.pd_lock = threading.RLock()  # Protects page_directory
-        self.rid_lock = threading.RLock()  # Protects rid_counter
-        self.vc_lock = threading.RLock()  # Protects version_chain
-        self.insert_lock = threading.RLock()  # Protects entire insert operation
+        self.metadata_lock = threading.RLock()
+        self.pd_lock = threading.RLock()
+        self.rid_lock = threading.RLock()
+        self.vc_lock = threading.RLock()
+        self.insert_lock = threading.RLock()
 
         self.index.create_index(self.key)
 
     def insert_row(self, columns):
         """Thread-safe row insertion - entire operation is atomic including duplicate check"""
-        # Use a single lock for the entire insert operation to prevent race conditions
         with self.insert_lock:
-            # Check for duplicate key INSIDE the lock
             primary_key_value = columns[self.key]
             existing_rid = self.index.locate(self.key, primary_key_value)
             
             if existing_rid is not None:
-                # Duplicate key found
                 return None
-            
-            # Allocate RID
+
             rid = self.rid_counter + 1
             self.rid_counter += 1
             
             page_positions = [None] * self.num_columns
-       
-            # Write to all column pages
+
             for i, value in enumerate(columns):
                 current_page = self.base_page[i][-1]
-                
-                # Check and allocate new page if needed
+
                 if not current_page.has_capacity():
                     new_page = Page()
                     self.base_page[i].append(new_page)
@@ -85,11 +77,9 @@ class Table:
                 page_index = len(self.base_page[i]) - 1
                 record_offset = self.base_page[i][-1].num_records - 1
                 page_positions[i] = (page_index, record_offset)
-            
-            # Update page directory (already under insert_lock)
+
             self.page_directory[rid] = page_positions
-            
-            # Update index (also under insert_lock)
+
             self.index.insert(self.key, primary_key_value, rid)
             
             return rid
