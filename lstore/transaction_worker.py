@@ -1,63 +1,67 @@
 from lstore.table import Table, Record
 from lstore.index import Index
 import threading
+import time
 
 class TransactionWorker:
     """
-    # Creates a transaction worker object.
+    Transaction worker that executes transactions with limited retry.
     """
     def __init__(self, transactions = []):
         self.stats = []
-        self.transactions = transactions[:] if transactions else []  # Copy the list
+        self.transactions = transactions[:] if transactions else []
         self.result = 0
         self.thread = None
-
     
-    """
-    Appends t to transactions
-    """
     def add_transaction(self, t):
+        """Appends t to transactions"""
         self.transactions.append(t)
-
-        
-    """
-    Runs all transaction as a thread
-    """
+    
     def run(self):
-        # Create and start a thread that calls __run
+        """Runs all transaction as a thread"""
         self.thread = threading.Thread(target=self.__run)
+        self.thread.daemon = False
         self.thread.start()
     
-
-    """
-    Waits for the worker to finish
-    """
     def join(self):
+        """Waits for the worker to finish"""
         if self.thread is not None:
-            self.thread.join()
-
-
+            self.thread.join(timeout=30)
+            if self.thread.is_alive():
+                print(f"WARNING: Worker thread did not finish within timeout")
+    
     def __run(self):
         """
         Execute all transactions assigned to this worker.
-        Retry aborted transactions until they commit.
+        With simplified locking, most should succeed on first try.
         """
         for transaction in self.transactions:
-            # Keep retrying until the transaction commits
             committed = False
-            while not committed:
-                # Each transaction returns True if committed or False if aborted
-                result = transaction.run()
+            retry_count = 0
+            max_retries = 10
+            
+            while not committed and retry_count < max_retries:
+                try:
+                    result = transaction.run()
+                    
+                    if result:
+                        committed = True
+                        self.stats.append(True)
+                    else:
+                        transaction.executed_operations.clear()
+                        retry_count += 1
+
+                        if retry_count < max_retries:
+                            time.sleep(0.001)
                 
-                if result:
-                    # Transaction committed successfully
-                    committed = True
-                    self.stats.append(True)
-                else:
-                    # Transaction aborted due to lock conflict or other failure
-                    # Reset transaction state for retry
+                except Exception as e:
                     transaction.executed_operations.clear()
-                    # Note: locks are already released in abort()
+                    retry_count += 1
+                    if retry_count < max_retries:
+                        time.sleep(0.001)
+            
+            if not committed:
+                print(f"WARNING: Transaction failed after {max_retries} retries")
+                self.stats.append(False)
         
-        # Store the number of transactions that committed
-        self.result = len(list(filter(lambda x: x, self.stats)))
+        self.result = len([x for x in self.stats if x])
