@@ -179,45 +179,58 @@ class Query:
             return False
 
     
+
     def sum_version(self, start_range, end_range, aggregate_column_index, relative_version):
         try:
-            output = 0
+            total = 0
             found = False
-            rid_list = self.table.index.locate_range(start_range, end_range, self.table.key)
-            
-            for rid in rid_list:
+
+            rids = self.table.index.locate_range(start_range, end_range, self.table.key)
+
+            for rid in rids:
+
+                # ---- locate base location ----
                 with self.table.pd_lock:
                     if rid not in self.table.page_directory:
                         continue
-                    pd_loc = self.table.page_directory[rid][aggregate_column_index]
-                
-                value = None
+                    base_page_index, base_slot = self.table.page_directory[rid][aggregate_column_index]
+
+                # ---- if asking for newest version ----
                 if relative_version == 0:
-                    page_index, record_offset = pd_loc
-                    value = self.table.read_column(aggregate_column_index, page_index, record_offset)
-                else:
-                    version_idx = -relative_version - 1
-                    with self.table.vc_lock:
-                        if rid in self.table.version_chain and version_idx < len(self.table.version_chain[rid]):
-                            tail_loc = self.table.version_chain[rid][version_idx][aggregate_column_index]
-                        else:
-                            tail_loc = None
-                    
-                    if tail_loc is not None:
-                        page_index, record_offset = tail_loc
-                        page = self.table.tail_page[aggregate_column_index][page_index]
-                        value = page.read(record_offset)
-                    else:
-                        page_index, record_offset = pd_loc
-                        value = self.table.read_column(aggregate_column_index, page_index, record_offset)
-                
-                if value is not None:
-                    output += value
+                    value = self.table.read_column(aggregate_column_index, base_page_index, base_slot)
+                    total += value
                     found = True
-            
-            return output if found else False
+                    continue
+
+                # ---- resolve relative version number ----
+                version_idx = -relative_version - 1  # -1 → 0, -2 → 1, etc.
+
+                with self.table.vc_lock:
+                    chain = self.table.version_chain.get(rid, [])
+
+                    # If version too old, clamp to oldest available
+                    if version_idx >= len(chain):
+                        version_idx = len(chain) - 1
+
+                    version_entry = chain[version_idx] if chain else None
+
+                # ---- versioned column ----
+                if version_entry and version_entry[aggregate_column_index] is not None:
+                    page_idx, slot_idx = version_entry[aggregate_column_index]
+                    page = self.table.tail_page[aggregate_column_index][page_idx]
+                    value = page.read(slot_idx)
+                else:
+                    # fallback: base page
+                    value = self.table.read_column(aggregate_column_index, base_page_index, base_slot)
+
+                total += value
+                found = True
+
+            return total if found else False
+
         except:
             return False
+
 
 
     def increment(self, key, column):
