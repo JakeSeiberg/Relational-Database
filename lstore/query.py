@@ -25,9 +25,6 @@ class Query:
             
             return True
         except Exception as e:
-            print(f"DELETE ERROR: {e}")
-            import traceback
-            traceback.print_exc()
             return False
     
     
@@ -46,9 +43,6 @@ class Query:
                 print(f"Insert FAILED: key={primary_key}, insert_row returned None")
                 return False
         except Exception as e:
-            print(f"INSERT EXCEPTION for key {columns[self.table.key]}: {e}")
-            import traceback
-            traceback.print_exc()
             return False
 
     
@@ -76,9 +70,6 @@ class Query:
             
             return [Record(rid, search_key, record_values)]
         except Exception as e:
-            print(f"SELECT ERROR for key {search_key}: {e}")
-            import traceback
-            traceback.print_exc()
             return []
 
 

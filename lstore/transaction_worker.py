@@ -38,7 +38,7 @@ class TransactionWorker:
         for transaction in self.transactions:
             committed = False
             retry_count = 0
-            max_retries = 10  # Reduced - should rarely need retries
+            max_retries = 10
             
             while not committed and retry_count < max_retries:
                 try:
@@ -48,18 +48,13 @@ class TransactionWorker:
                         committed = True
                         self.stats.append(True)
                     else:
-                        # Reset for retry
                         transaction.executed_operations.clear()
                         retry_count += 1
-                        
-                        # Small delay
+
                         if retry_count < max_retries:
                             time.sleep(0.001)
                 
                 except Exception as e:
-                    print(f"ERROR in transaction: {type(e).__name__}: {e}")
-                    import traceback
-                    traceback.print_exc()
                     transaction.executed_operations.clear()
                     retry_count += 1
                     if retry_count < max_retries:

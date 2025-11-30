@@ -34,22 +34,18 @@ class Transaction:
         """
         try:
             for query, table, args in self.queries:
-                # Execute the query
                 result = query(*args)
-                
-                # If query failed, abort
+
                 if result is False:
                     return self.abort()
-                
-                # Track for potential rollback
+
                 self.executed_operations.append({
                     'query': query,
                     'table': table,
                     'args': args,
                     'result': result
                 })
-            
-            # All succeeded
+
             return self.commit()
             
         except Exception as e:
